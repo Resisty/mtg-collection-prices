@@ -36,35 +36,40 @@ def bulk_file():
     all_cards = [i['download_uri'] for i in req_json['data'] if i['type'] == 'all_cards'][0]
     filename = all_cards.split('/')[-1]
     if not os.path.isfile(f'./{filename}'):
+        LOGGER.info('Most recent bulk data "%s" not found; downloading...', filename)
         bulk_req = http.request('GET', all_cards)
         with open(filename, 'wb') as out:
             out.write(bulk_req.data)
     return filename
 
-def prepare_card_data(code):
+def prepare_card_data(code, price=2):
     """ Obtain, read, and correct card data from bulk json
 
         :param code: 3-letter MTG set code to look up
     """
     bulk_data = bulk_file()
     with open(bulk_data) as fhandle:
+        LOGGER.info('Loading card data for set "%s" from bulk data...', code)
         data = json.loads(fhandle.read())
         set_cards = [i for i in data if i['set'] == code]
     cards = []
+    LOGGER.info('Fixing price data for set "%s"...', code)
     for card in set_cards:
+        unknown_usd = True if not card['prices']['usd'] and card['lang'] == 'en' else False
         card['prices']['usd'] = Decimal(card['prices']['usd']) if card['prices']['usd'] else 0
         card['prices']['usd_foil'] = Decimal(card['prices']['usd_foil']) if card['prices']['usd_foil'] else 0
-        if card['prices']['usd'] > 2:
+        if card['prices']['usd'] > price or unknown_usd:
             cards.append(card)
-        elif card['prices']['usd_foil'] > 2:
+        elif card['prices']['usd_foil'] > price:
             cards.append(card)
     return cards
 
 def visual(args):
     """ Main entry point
     """
-    cards = sorted(prepare_card_data(args.set_code), key=lambda x: x['prices']['usd'], reverse=True)
+    cards = sorted(prepare_card_data(args.set_code, price=args.price), key=lambda x: x['prices']['usd'], reverse=True)
     with open(f'{args.set_code}.csv', 'w') as fhandle:
+        LOGGER.info('Writing visual CSV for set "%s"...', args.set_code)
         writer = csv.writer(fhandle)
         writer.writerow(['Card/Price', 'Qty'] * 10)
         for chunk in chunks(cards, 10):
@@ -84,22 +89,36 @@ def visual(args):
 def text(args):
     """ Main entry point
     """
-    cards = sorted(prepare_card_data(args.set_code), key=lambda x: x['name'])
+    cards = sorted(prepare_card_data(args.set_code, price=args.price), key=lambda x: x['name'])
     with open(f'{args.set_code}.csv', 'w') as fhandle:
+        LOGGER.info('Writing visual CSV for set "%s"...', args.set_code)
         writer = csv.writer(fhandle)
-        writer.writerow(['Name', 'Price / FoilPrice', 'Qty',])
-        for card in cards:
-            clean_name = card["name"].replace('"', '\\"')
-            writer.writerow(
-                [
-                    f'=HYPERLINK("{card["scryfall_uri"]}","{clean_name}")',
-                    f'{card["prices"]["usd"]} / {card["prices"]["usd_foil"]}',
-                    ''
-                ]
-            )
+        writer.writerow(['Rarity', 'Name', 'Price', 'Qty', 'FoilPrice', 'Qty', 'Notes'])
+        for rarity in ['Mythic', 'Rare', 'Uncommon', 'Common']:
+            writer.writerow([rarity, '', '', '', '', '', ''])
+            for card in cards:
+                if card['rarity'] == rarity.lower():
+                    clean_name = card["name"].replace('"', '\\"')
+                    writer.writerow(
+                        [
+                            '',
+                            f'=HYPERLINK("{card["scryfall_uri"]}","{clean_name}")',
+                            f'{card["prices"]["usd"]}',
+                            '',
+                            f'{card["prices"]["usd_foil"]}',
+                            '',
+                            ''
+                        ]
+                    )
 
 if __name__ == '__main__':
     PARSER = argparse.ArgumentParser()
+    PARSER.add_argument(
+        '-p', '--price',
+        help='The lowest price to allow',
+        default=2,
+        type=Decimal
+    )
     PARSER.add_argument(
         '-v', '--verbose',
         help='Verbosity',
